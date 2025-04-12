@@ -76,13 +76,13 @@ bool HashTable::insert(unsigned int key, unsigned int val)
     size_t idx = table.hash(key);
     locks[idx % lock_length].lock();
     bool success = table.tbl[idx]->insert(key, val);
+    // release the lock first, before contending for resize
     locks[idx % lock_length].unlock();
     if (success)
     {
         table.size++;
         if (needs_resize())
         {
-            // release the lock first, before contending for resize
             resize();
             return success;
         }

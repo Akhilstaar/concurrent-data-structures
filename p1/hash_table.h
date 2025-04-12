@@ -9,6 +9,7 @@
 #include <iostream>
 #include <thread>
 #include <mutex>
+#include <functional>
 
 struct Node
 {
@@ -138,11 +139,10 @@ public:
         }
     }
 
-    // hash should be a function pointer, which can change based on the size of the hash table.
-    // For now, letting it be a simple modulo function.
+    // TODO: hash should be a function pointer, which can change based on the size of the hash table.
     size_t hash(unsigned int key) const
     {
-        return key % capacity.load(std::memory_order_relaxed);
+        return std::hash<uint32_t>{}(key) % capacity.load(std::memory_order_relaxed);
     }
 };
 

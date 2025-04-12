@@ -67,6 +67,6 @@ build_p1_tbb: p1_tbb.out
 build_p2_boost: p2_boost.out
 
 clean:
-	rm -f p1.out p1_tbb.out p2.out p2_boost.out p3.out p3_test.out *.o compile_commands.json
+	rm -f p1.out p1_tbb.out p2.out p2_boost.out p3.out p3_test.out *.o
 
 .PHONY: all clean build_p1_tbb build_p2_boost
