@@ -83,6 +83,7 @@ uint64_t DELETE = 0;
 /** number of iterations */
 uint64_t runs = 2;
 
+uint64_t NO_THREADS = std::thread::hardware_concurrency();
 // List of valid flags and description
 void validFlagsDescription()
 {
@@ -116,6 +117,10 @@ int parse_args(char *arg)
     if (s1 == "-ops")
     {
         NUM_OPS = val;
+    }
+    else if (s1 == "-thr")
+    {
+        NO_THREADS = val;
     }
     else if (s1 == "-rns")
     {
@@ -162,16 +167,15 @@ static void *insertWorker(void *arg)
 void batch_insert(HashTable *ht, KeyValue *kv_pairs, bool *result)
 {
     size_t num_pairs = sizeof(kv_pairs) / sizeof(KeyValue);
-    size_t num_threads = std::thread::hardware_concurrency(); // or pick a fixed value
-    size_t chunk_size = num_pairs / num_threads;
+    size_t chunk_size = num_pairs / NO_THREADS;
 
-    std::vector<pthread_t> threads(num_threads);
-    std::vector<InsertArgs> args(num_threads);
+    std::vector<pthread_t> threads(NO_THREADS);
+    std::vector<InsertArgs> args(NO_THREADS);
 
-    for (size_t t = 0; t < num_threads; ++t)
+    for (size_t t = 0; t < NO_THREADS; ++t)
     {
         args[t].start = t * chunk_size;
-        args[t].end = (t == num_threads - 1) ? num_pairs : (t + 1) * chunk_size;
+        args[t].end = (t == NO_THREADS - 1) ? num_pairs : (t + 1) * chunk_size;
         args[t].ht = ht;
         args[t].kv_pairs = kv_pairs;
         args[t].result = result;
@@ -208,16 +212,15 @@ static void *deleteWorker(void *arg)
 void batch_delete(HashTable *ht, uint32_t *key_list, bool *result)
 {
     size_t num_keys = sizeof(key_list) / sizeof(uint32_t);
-    size_t num_threads = std::thread::hardware_concurrency();
-    size_t chunk_size = num_keys / num_threads;
+    size_t chunk_size = num_keys / NO_THREADS;
 
-    std::vector<pthread_t> threads(num_threads);
-    std::vector<DeleteArgs> args(num_threads);
+    std::vector<pthread_t> threads(NO_THREADS);
+    std::vector<DeleteArgs> args(NO_THREADS);
 
-    for (size_t t = 0; t < num_threads; ++t)
+    for (size_t t = 0; t < NO_THREADS; ++t)
     {
         args[t].start = t * chunk_size;
-        args[t].end = (t == num_threads - 1) ? num_keys : (t + 1) * chunk_size;
+        args[t].end = (t == NO_THREADS - 1) ? num_keys : (t + 1) * chunk_size;
         args[t].ht = ht;
         args[t].key_list = key_list;
         args[t].result = result;
@@ -254,16 +257,15 @@ static void *lookupWorker(void *arg)
 void batch_search(HashTable *ht, uint32_t *key_list, uint32_t *result)
 {
     size_t num_keys = sizeof(key_list) / sizeof(uint32_t);
-    size_t num_threads = std::thread::hardware_concurrency();
-    size_t chunk_size = num_threads ? (num_keys / num_threads) : num_keys;
+    size_t chunk_size = NO_THREADS ? (num_keys / NO_THREADS) : num_keys;
 
-    std::vector<pthread_t> threads(num_threads);
-    std::vector<LookupArgs> args(num_threads);
+    std::vector<pthread_t> threads(NO_THREADS);
+    std::vector<LookupArgs> args(NO_THREADS);
 
-    for (size_t t = 0; t < num_threads; ++t)
+    for (size_t t = 0; t < NO_THREADS; ++t)
     {
         args[t].start = t * chunk_size;
-        args[t].end = (t == num_threads - 1) ? num_keys : (t + 1) * chunk_size;
+        args[t].end = (t == NO_THREADS - 1) ? num_keys : (t + 1) * chunk_size;
         args[t].ht = ht;
         args[t].key_list = key_list;
         args[t].result = result;
@@ -307,10 +309,10 @@ int main(int argc, char *argv[])
 
     // Use shared files filled with random numbers
     path cwd = std::filesystem::current_path();
-    path path_insert_keys = cwd / "../random_keys_insert.bin";
-    path path_insert_values = cwd / "../random_values_insert.bin";
-    path path_delete = cwd / "../random_keys_delete.bin";
-    path path_search = cwd / "../random_keys_search.bin";
+    path path_insert_keys = cwd / "random_keys_insert.bin";
+    path path_insert_values = cwd / "random_values_insert.bin";
+    path path_delete = cwd / "random_keys_delete.bin";
+    path path_search = cwd / "random_keys_search.bin";
 
     assert(std::filesystem::exists(path_insert_keys));
     assert(std::filesystem::exists(path_insert_values));
@@ -360,7 +362,7 @@ int main(int argc, char *argv[])
     float total_delete_time = 0.0F;
     float total_search_time = 0.0F;
 
-    size_t capacity = 2e5;
+    size_t capacity = 2e3;
     HashTable *ht = new HashTable(capacity);
 
     HRTimer start, end;
@@ -399,6 +401,8 @@ int main(int argc, char *argv[])
             search_runs++;
             total_search_time += iter_search_time;
         }
+
+        cout << "Run " << (i + 1) << " completed." << endl;
     }
 
     cout << "Time taken by insert kernel (ms): " << total_insert_time / runs

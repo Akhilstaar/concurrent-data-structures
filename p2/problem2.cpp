@@ -178,7 +178,7 @@ int main(int argc, char *argv[])
 
     // Use shared files filled with random numbers
     path cwd = std::filesystem::current_path();
-    path path_insert_values = cwd / "../random_values_insert.bin";
+    path path_insert_values = cwd / "random_values_insert.bin";
     assert(std::filesystem::exists(path_insert_values));
 
     // Read data from file

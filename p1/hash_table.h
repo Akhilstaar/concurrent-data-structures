@@ -110,7 +110,7 @@ public:
             }
             curr = curr->next;
         }
-        return {false, 0};
+        return {false, 0}; // return 0 for failed search.
     }
 };
 
