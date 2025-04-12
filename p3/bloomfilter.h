@@ -25,14 +25,12 @@ private:
 
     uint64_t hash2(uint32_t x) const
     {
-        // Simple variation (e.g., different prime/shift)
         uint64_t hash = (static_cast<uint64_t>(x) * 31) ^ (static_cast<uint64_t>(x) >> 15);
         return hash % FILTER_SIZE;
     }
 
     uint64_t hash3(uint32_t x) const
     {
-        // Another simple variation
         uint64_t hash = (static_cast<uint64_t>(x) * 17) ^ (static_cast<uint64_t>(x) << 5);
         return hash % FILTER_SIZE;
     }

@@ -10,7 +10,13 @@
 #include <thread>
 #include <pthread.h>
 #include <vector>
+#include <atomic>
+
+#ifdef USE_BOOST_QUEUE
+#include <boost/lockfree/queue.hpp>
+#else
 #include "lockfreequeue.h"
+#endif
 
 using std::cout;
 using std::endl;
@@ -23,7 +29,6 @@ using std::chrono::milliseconds;
 using std::filesystem::path;
 
 static constexpr uint64_t RANDOM_SEED = 42;
-static const uint32_t bucket_count = 1000;
 static constexpr uint64_t MAX_OPERATIONS = 1e+15;
 
 typedef struct
@@ -76,9 +81,7 @@ void read_data(path pth, uint64_t n, uint32_t *data)
 
 // These variables may get overwritten after parsing the CLI arguments
 /** total number of operations */
-uint64_t NUM_OPS = 1e8;
-/** percentage of insert queries */
-uint64_t INSERT = 80;
+uint64_t NUM_OPS = 1e6;
 /** number of iterations */
 uint64_t runs = 2;
 
@@ -87,9 +90,9 @@ unsigned int NUM_THREADS = std::thread::hardware_concurrency(); // Default to ha
 // List of valid flags and description
 void validFlagsDescription()
 {
-    cout << "-ops: specify total number of operations\n";
+    cout << "-ops=<value>: specify total number of operations (e.g., -ops=1000000)\n";
     cout << "-thr=<value>: number of threads to use (e.g., -thr=4)\n";
-    cout << "-rns: the number of iterations\n";
+    cout << "-rns=<value>: the number of iterations (e.g., -rns=3)\n";
 }
 
 // Code snippet to parse command line flags and initialize the variables
@@ -140,29 +143,81 @@ int parse_args(char *arg)
     return 0;
 }
 
+#ifdef USE_BOOST_QUEUE
 struct ThreadArgs
 {
-    LockFreeQueue *queue;
+    boost::lockfree::queue<uint32_t> *boost_queue;
     const uint32_t *insert_data_start;
-    uint64_t num_ops;
+    uint64_t num_ops_per_thread;
     int thread_id;
+    std::atomic<uint64_t> *success_enq;
+    std::atomic<uint64_t> *success_deq;
 };
 
 void worker_thread(ThreadArgs args)
 {
-    for (uint64_t i = 0; i < args.num_ops; ++i)
+    uint64_t local_success_enq = 0;
+    uint64_t local_success_deq = 0;
+    uint64_t tmp;
+
+    for (uint64_t i = 0; i < args.num_ops_per_thread; i++)
     {
         if (rand() % 8 == 0)
         {
-            args.queue->enq(args.insert_data_start[i]);
+            if (args.boost_queue->push(args.insert_data_start[i % (args.num_ops_per_thread)])) // Use modulo to avoid out-of-bounds if data array is smaller than total ops
+            {
+                local_success_enq++;
+            }
         }
         else
         {
-
-            int result = args.queue->deq();
+            if (args.boost_queue->pop(tmp))
+            {
+                local_success_deq++;
+            }
         }
     }
+    args.success_enq->fetch_add(local_success_enq);
+    args.success_deq->fetch_add(local_success_deq);
 }
+
+#else // Using custom LockFreeQueue
+
+struct ThreadArgs
+{
+    LockFreeQueue *queue;
+    const uint32_t *insert_data_start;
+    uint64_t num_ops_per_thread;
+    int thread_id;
+    std::atomic<uint64_t> *success_enq;
+    std::atomic<uint64_t> *success_deq;
+};
+
+void worker_thread(ThreadArgs args)
+{
+    uint64_t local_success_enq = 0;
+    uint64_t local_success_deq = 0;
+
+    for (uint64_t i = 0; i < args.num_ops_per_thread; i++)
+    {
+        if (rand() % 8 == 0)
+        {
+            args.queue->enq(args.insert_data_start[i % (args.num_ops_per_thread)]);
+            local_success_enq++;
+        }
+        else
+        {
+            int result = args.queue->deq();
+            if (result != -1)
+            {
+                local_success_deq++;
+            }
+        }
+    }
+    args.success_enq->fetch_add(local_success_enq);
+    args.success_deq->fetch_add(local_success_deq);
+}
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -176,53 +231,71 @@ int main(int argc, char *argv[])
         }
     }
 
-    // Use shared files filled with random numbers
+#ifdef USE_BOOST_QUEUE
+    cout << "Using Boost Lock-Free Queue" << endl;
+#else
+    cout << "Using Custom Lock-Free Queue" << endl;
+#endif
+    cout << "Total Ops: " << NUM_OPS << endl;
+    cout << "Threads: " << NUM_THREADS << endl;
+    cout << "Runs: " << runs << endl;
+
     path cwd = std::filesystem::current_path();
     path path_insert_values = cwd / "random_values_insert.bin";
+
     assert(std::filesystem::exists(path_insert_values));
 
-    // Read data from file
-    auto *values_insert = new uint32_t[NUM_OPS];
-    read_data(path_insert_values, NUM_OPS, values_insert);
-
-    // Max limit of the uint32_t: 4,294,967,295
-    std::mt19937 gen(RANDOM_SEED);
-    std::uniform_int_distribution<uint32_t> dist_int(1, NUM_OPS);
+    uint64_t max_possible_enqueues = NUM_OPS;
+    auto *values_insert = new uint32_t[max_possible_enqueues];
+    read_data(path_insert_values, max_possible_enqueues, values_insert);
 
     float total_time = 0.0F;
-    std::vector<std::thread> threads(NUM_THREADS);
+    double total_ops_executed = 0;
+    uint64_t total_success_enq_all_runs = 0;
+    uint64_t total_success_deq_all_runs = 0;
 
     HRTimer start, end;
-    for (uint32_t i = 0; i < runs; i++)
+    for (uint32_t run = 0; run < runs; run++)
     {
-        LockFreeQueue qq;
+#ifdef USE_BOOST_QUEUE
+        boost::lockfree::queue<uint32_t> queue_instance(NUM_OPS);
+#else
+        LockFreeQueue queue_instance;
+#endif
+
+        std::vector<std::thread> threads(NUM_THREADS);
+        std::vector<ThreadArgs> thread_args(NUM_THREADS);
+        std::atomic<uint64_t> run_success_enq = {0};
+        std::atomic<uint64_t> run_success_deq = {0};
+
+        uint64_t ops_per_thread = NUM_OPS / NUM_THREADS;
+        uint64_t ops_remainder = NUM_OPS % NUM_THREADS;
+        uint64_t current_data_offset = 0;
+
         start = HR::now();
 
-        //  Whether a thread issues a enq() or a deq() can be decided based on probability.
-        //  issue concurrent calls to the queue
-        uint64_t enq_ops = NUM_OPS / NUM_THREADS;
-        uint64_t extra_enq = NUM_OPS % NUM_THREADS;
-
-        uint64_t current_enq_offset = 0;
-
-        for (unsigned int i = 0; i < NUM_THREADS; ++i)
+        for (unsigned int i = 0; i < NUM_THREADS; i++)
         {
-            uint64_t thread_enq = enq_ops + (i < extra_enq ? 1 : 0);
+            uint64_t thread_ops = ops_per_thread + (i < ops_remainder ? 1 : 0);
+            uint64_t data_needed = (thread_ops + 1) / 2;
 
-            ThreadArgs args;
-            args.queue = &qq;
-            args.insert_data_start = values_insert + current_enq_offset;
-            args.num_ops = thread_enq;
-            args.thread_id = i;
+#ifdef USE_BOOST_QUEUE
+            thread_args[i].boost_queue = &queue_instance;
+#else
+            thread_args[i].queue = &queue_instance;
+#endif
+            thread_args[i].insert_data_start = values_insert + current_data_offset;
+            thread_args[i].num_ops_per_thread = thread_ops;
+            thread_args[i].thread_id = i;
+            thread_args[i].success_enq = &run_success_enq;
+            thread_args[i].success_deq = &run_success_deq;
 
-            // Debug
-            // cout << "Thread " << i << ": EnQ=" << thread_enq << ", DeQ=" << thread_deq << ", Offset=" << current_enq_offset << endl;
+            threads[i] = std::thread(worker_thread, thread_args[i]);
 
-            threads[i] = std::thread(worker_thread, args);
-            current_enq_offset += thread_enq;
+            current_data_offset += data_needed;
         }
 
-        for (unsigned int i = 0; i < NUM_THREADS; ++i)
+        for (unsigned int i = 0; i < NUM_THREADS; i++)
         {
             if (threads[i].joinable())
             {
@@ -234,10 +307,28 @@ int main(int argc, char *argv[])
         float iter_time = duration_cast<milliseconds>(end - start).count();
         total_time += iter_time;
 
-        cout << "Run " << (i + 1) << " completed in " << iter_time << " ms." << endl;
+        uint64_t successful_ops_this_run = run_success_enq.load() + run_success_deq.load();
+        total_success_enq_all_runs += run_success_enq.load();
+        total_success_deq_all_runs += run_success_deq.load();
+        total_ops_executed += successful_ops_this_run;
+
+        cout << "Run " << (run + 1) << " completed in " << iter_time << " ms. ";
     }
 
-    cout << "Time taken by kernel (ms): " << total_time / runs << "\n";
+    float avg_time_ms = total_time / runs;
+    double avg_successful_ops = total_ops_executed / runs;
+    double avg_throughput_kops_sec = 0;
+    if (avg_time_ms > 0)
+    {
+        avg_throughput_kops_sec = (avg_successful_ops / (avg_time_ms / 1000.0)) / 1000.0;
+    }
 
-    return EXIT_SUCCESS;
+    cout << "Average time per run (ms): " << avg_time_ms << "\n";
+    cout << "Average successful ENQ ops per run: " << (double)total_success_enq_all_runs / runs << "\n";
+    cout << "Average successful DEQ ops per run: " << (double)total_success_deq_all_runs / runs << "\n";
+    cout << "Average total successful ops per run: " << avg_successful_ops << "\n";
+    cout << "Average Throughput (K ops/sec): " << avg_throughput_kops_sec << "\n";
+
+    delete[] values_insert;
+    return 0;
 }

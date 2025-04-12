@@ -9,6 +9,7 @@
 #include <string>
 #include <thread>
 #include <pthread.h>
+#include <set>
 #include <vector>
 #include "bloomfilter.h"
 
@@ -150,6 +151,7 @@ struct ThreadArgs
 
 void worker_thread(ThreadArgs args)
 {
+    
     for (uint64_t i = 0; i < args.num_ops; ++i)
     {
         if (rand() % 8 == 0)
