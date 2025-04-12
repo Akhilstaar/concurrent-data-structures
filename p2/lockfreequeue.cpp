@@ -1,5 +1,5 @@
 #include "lockfreequeue.h"
-#include "MyPointerIntPair.h"
+#include "mypointerintpair.h"
 #include <iostream>
 
 bool LockFreeQueue::enq(uint32_t x)

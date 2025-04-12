@@ -76,7 +76,7 @@ void read_data(path pth, uint64_t n, uint32_t *data)
 
 // These variables may get overwritten after parsing the CLI arguments
 /** total number of operations */
-uint64_t NUM_OPS = 1e8;
+uint64_t NUM_OPS = 1e6;
 /** percentage of insert queries */
 uint64_t INSERT = 80;
 /** number of iterations */

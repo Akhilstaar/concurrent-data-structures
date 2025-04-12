@@ -1,6 +1,6 @@
 // lockfreequeue.h
 #include <atomic>
-#include "MyPointerIntPair.h"
+#include "mypointerintpair.h"
 
 struct Node
 {
