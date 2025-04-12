@@ -1,69 +1,76 @@
 #include "lockfreequeue.h"
+#include "MyPointerIntPair.h"
+#include <iostream>
 
-template <typename T>
-void LockFreeQueue<T>::enq(T x)
+bool LockFreeQueue::enq(uint32_t x)
 {
-    Node curr = new Node(x);
+    Node *curr = new Node(x);
     while (true)
     {
-        Node last = tail.load();
-        Node next = last.next.load();
-        if (last == tail.load())
+        PIP tail_pip = tail.load(std::memory_order_acquire);
+        Node *last = tail_pip.getPtr();
+        Node *next = last->next.load(std::memory_order_acquire);
+
+        if (tail_pip == tail.load(std::memory_order_acquire)) // double check
         {
             if (next == nullptr)
             {
-                if (last.next.compare_exchange_strong(next, curr))
+                if (last->next.compare_exchange_strong(next, curr, std::memory_order_release, std::memory_order_relaxed))
                 {
-                    tail.compare_exchange_strong(last, curr);
-                    return;
+                    PIP new_tail_pip(curr, tail_pip.getCnt() + 1); // cnt will wrap
+                    tail.compare_exchange_strong(tail_pip, new_tail_pip, std::memory_order_release, std::memory_order_relaxed);
+                    return true;
                 }
             }
             else
             {
-                tail.compare_exchange_strong(last, next);
+                PIP new_tail_pip(next, tail_pip.getCnt() + 1);
+                tail.compare_exchange_strong(tail_pip, new_tail_pip, std::memory_order_release, std::memory_order_relaxed);
             }
         }
     }
 }
 
-// TODO: deq() operation on an empty queue should return a negative integer, i.e., it will not block.
-template <typename T>
-void LockFreeQueue<T>::deq(T x)
+int LockFreeQueue::deq()
 {
     while (true)
     {
-        Node first = head.load();
-        Node last = tail.load();
-        Node next = first.next.load();
-        if (first == head.load()){ // Double check
-            if (first == last){
+        PIP head_pip = head.load(std::memory_order_acquire);
+        Node *first = head_pip.getPtr();
+        PIP tail_pip = tail.load(std::memory_order_acquire);
+        Node *last = tail_pip.getPtr();
+        Node *next = first->next.load(std::memory_order_acquire);
+        if (head_pip == head.load(std::memory_order_acquire))
+        {
+            if (first == last)
+            {
                 if (next == nullptr)
-                {
-                    // add code here
-                }
-                tail.compare_exchange_strong(last, next);
+                    return -1;
+                PIP new_tail_pip(next, tail_pip.getCnt() + 1);
+                tail.compare_exchange_strong(tail_pip, new_tail_pip, std::memory_order_release, std::memory_order_relaxed);
             }
             else
             {
-                T val = next.val;
-                if (head.compare_exchange_strong(first, next))
-                return val;
+                int val = next->val;
+                PIP new_head(next, head_pip.getCnt() + 1);
+                if (head.compare_exchange_strong(head_pip, new_head, std::memory_order_release, std::memory_order_relaxed))
+                {
+                    delete first;
+                    return val;
+                }
             }
         }
     }
 }
 
-template <typename T>
-void LockFreeQueue<T>::print()
+void LockFreeQueue::print()
 {
-    Node first = head.load();
-    Node nxt = first.next.load();
-
-    while (nxt != nullptr)
+    PIP head_pip = head.load();
+    Node *current = head_pip.getPtr()->next.load();
+    while (current != nullptr)
     {
-        cout << nxt.val() << " ";
-        nxt = nxt.next.load();
+        std::cout << current->val << " ";
+        current = current->next.load();
     }
-    cout << '\n';
-    return;
+    std::cout << "\n";
 }

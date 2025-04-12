@@ -1,30 +1,42 @@
+// lockfreequeue.h
 #include <atomic>
-#include <stdexcept>
+#include "MyPointerIntPair.h"
 
-template <typename T>
-struct Node{
-    T val;
-    std::atomic_ref<Node*> next; // requires C++20
-
-    Node(T x, Node* next = nullptr) : val(x), next(nullptr) {}
+struct Node
+{
+    uint32_t val;
+    std::atomic<Node *> next;
+    Node(uint32_t x, Node *nxt = nullptr) : val(x), next(nxt) {}
 };
 
-template <typename T>
-class LockFreeQueue{
-    
-private:
-    std::atomic_ref<Node*> head;
-    std::atomic_ref<Node*> tail;
-    
+using PIP = MyPointerIntPair<Node *>;
+class LockFreeQueue
+{
 public:
-    LockFreeQueue(){
-        this->head = new Node(NULL);
-        this->tail = new Node(NULL);
-    }
-    
-    void enq(T x){ }
-    
-    void deq(T x){ }
+    std::atomic<PIP> head;
+    std::atomic<PIP> tail;
 
-    void print(){ }
+    LockFreeQueue()
+    {
+        Node *n = new Node(0);
+        PIP initial(n, 0);
+        head.store(initial, std::memory_order_relaxed);
+        tail.store(initial, std::memory_order_relaxed);
+    }
+
+    ~LockFreeQueue()
+    {
+        // Basic cleanup. Not thread-safe. Assumes queue is quiescent.
+        Node *current = head.load().getPtr();
+        while (current != nullptr)
+        {
+            Node *next = current->next.load();
+            delete current;
+            current = next;
+        }
+    }
+
+    bool enq(uint32_t x);
+    int deq();
+    void print();
 };

@@ -1,83 +1,111 @@
 #ifndef USE_TBB
-
 #include "hash_table.h"
 #include <iostream>
+#include <pthread.h>
+#include <vector>
 
-void batch_insert(HashTable *ht, KeyValuePairs *kv_pairs, bool *result)
+void HashTable::resize()
 {
-    size_t num_pairs = kv_pairs->count;
-    std::vector<std::thread> threads;
+    size_t old_cap = table.capacity.load();
 
-    // worker function
-    auto worker = [ht, kv_pairs, result](size_t start, size_t end) {
-        for (size_t i = start; i < end; ++i) {
-            result[i] = ht->insert(kv_pairs->pairs[i].key, kv_pairs->pairs[i].value);
+    // acquire every lock
+    for (auto &lck : locks)
+    {
+        lck.lock();
+    }
+
+    if (old_cap != table.capacity.load())
+    {
+        // Someone already resized it
+        for (auto &lck : locks)
+        {
+            lck.unlock();
         }
-    };
-
-    size_t num_threads = std::thread::hardware_concurrency();
-    size_t chunk_size = num_pairs / num_threads;
-    for (size_t t = 0; t < num_threads; ++t) {
-        size_t start = t * chunk_size;
-        size_t end = (t == num_threads - 1) ? num_pairs : start + chunk_size;
-        threads.emplace_back(worker, start, end);
+        return;
     }
 
-    for (auto &t : threads) {
-        t.join();
+    // resize
+    size_t new_cap = old_cap * 2;
+    std::vector<List *> new_tbl(new_cap);
+    for (size_t i = 0; i < new_cap; ++i)
+    {
+        new_tbl[i] = new List();
     }
-    return;
+
+    // new hash function
+    // size_t new_hash(unsigned int key) const
+    // {
+    //     return key % new_cap;
+    // }
+
+    // Rehash entries
+    for (size_t i = 0; i < old_cap; ++i)
+    {
+        Node *curr = table.tbl[i]->top;
+        while (curr != nullptr)
+        {
+            size_t new_idx = curr->key % new_cap; // TODO: Change it to use the function to compute hash.
+            new_tbl[new_idx]->insert(curr->key, curr->value);
+            curr = curr->next;
+        }
+    }
+
+    for (List *list : table.tbl)
+    {
+        delete list;
+    }
+    table.tbl = new_tbl;
+    table.capacity.store(new_cap);
+
+    // Release all locks
+    for (auto &mtx : locks)
+    {
+        mtx.unlock();
+    }
 }
 
-void batch_delete(HashTable *ht, KeyList *key_list, bool *result)
+bool HashTable::contains(unsigned int key)
 {
-    size_t num_pairs = key_list->count;
-    std::vector<std::thread> threads;
-
-    // worker function
-    auto worker = [ht, key_list, result](size_t start, size_t end) {
-        for (size_t i = start; i < end; ++i) {
-            result[i] = ht->remove(key_list->keys[i]);
-        }
-    };
-
-    size_t num_threads = std::thread::hardware_concurrency();
-    size_t chunk_size = num_pairs / num_threads;
-    for (size_t t = 0; t < num_threads; ++t) {
-        size_t start = t * chunk_size;
-        size_t end = (t == num_threads - 1) ? num_pairs : start + chunk_size;
-        threads.emplace_back(worker, start, end);
-    }
-
-    for (auto &t : threads) {
-        t.join();
-    }
-    return;
+    size_t idx = table.hash(key);
+    std::lock_guard<std::recursive_mutex> lock(locks[idx % lock_length]);
+    return table.tbl[idx]->contains(key);
 }
 
-void batch_lookup(HashTable *ht, KeyList *key_list, uint32_t *result)
+bool HashTable::insert(unsigned int key, unsigned int val)
 {
-    size_t num_pairs = key_list->count;
-    std::vector<std::thread> threads;
-
-    // worker function
-    auto worker = [ht, key_list, result](size_t start, size_t end) {
-        for (size_t i = start; i < end; ++i) {
-            result[i] = ht->get_value(key_list->keys[i]).second;
+    size_t idx = table.hash(key);
+    locks[idx % lock_length].lock();
+    bool success = table.tbl[idx]->insert(key, val);
+    locks[idx % lock_length].unlock();
+    if (success)
+    {
+        table.size++;
+        if (needs_resize())
+        {
+            // release the lock first, before contending for resize
+            resize();
+            return success;
         }
-    };
-
-    size_t num_threads = std::thread::hardware_concurrency();
-    size_t chunk_size = num_pairs / num_threads;
-    for (size_t t = 0; t < num_threads; ++t) {
-        size_t start = t * chunk_size;
-        size_t end = (t == num_threads - 1) ? num_pairs : start + chunk_size;
-        threads.emplace_back(worker, start, end);
     }
-
-    for (auto &t : threads) {
-        t.join();
-    }
-    return;
+    return success;
 }
+
+bool HashTable::remove(unsigned int key)
+{
+    size_t idx = table.hash(key);
+    std::lock_guard<std::recursive_mutex> lock(locks[idx % lock_length]);
+    bool result = table.tbl[idx]->del(key);
+    if (result)
+        table.size--;
+    return result;
+}
+
+std::pair<bool, unsigned int> HashTable::get_value(unsigned int key)
+{
+    size_t idx = table.hash(key);
+    std::lock_guard<std::recursive_mutex> lock(locks[idx % lock_length]);
+    // pair<bool,unsigned int> can be used for query of different type
+    return table.tbl[idx]->getval(key);
+}
+
 #endif
